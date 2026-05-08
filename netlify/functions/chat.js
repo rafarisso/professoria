@@ -1,5 +1,11 @@
 const POLL_INTERVAL_MS = 1500;
 const MAX_POLLS = 15;
+const API_VERSION = process.env.AZURE_FOUNDRY_API_VERSION || '2025-05-01-preview';
+
+function withApiVersion(url) {
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}api-version=${encodeURIComponent(API_VERSION)}`;
+}
 
 export async function handler(event) {
   if (event.httpMethod !== 'POST') {
@@ -41,16 +47,20 @@ export async function handler(event) {
   };
 
   try {
-    // 1. Create or reuse thread for conversation continuity
+    // 1. Create or reuse thread
     let threadId = incomingThreadId;
     if (!threadId) {
-      const res = await fetch(`${base}/threads`, { method: 'POST', headers, body: '{}' });
+      const res = await fetch(withApiVersion(`${base}/threads`), {
+        method: 'POST',
+        headers,
+        body: '{}'
+      });
       if (!res.ok) throw new Error(`Erro ao criar thread: ${await res.text()}`);
       threadId = (await res.json()).id;
     }
 
     // 2. Add user message to thread
-    const msgRes = await fetch(`${base}/threads/${threadId}/messages`, {
+    const msgRes = await fetch(withApiVersion(`${base}/threads/${threadId}/messages`), {
       method: 'POST',
       headers,
       body: JSON.stringify({ role: 'user', content: question })
@@ -58,7 +68,7 @@ export async function handler(event) {
     if (!msgRes.ok) throw new Error(`Erro ao enviar mensagem: ${await msgRes.text()}`);
 
     // 3. Run the agent
-    const runRes = await fetch(`${base}/threads/${threadId}/runs`, {
+    const runRes = await fetch(withApiVersion(`${base}/threads/${threadId}/runs`), {
       method: 'POST',
       headers,
       body: JSON.stringify({ assistant_id: agentId })
@@ -75,7 +85,10 @@ export async function handler(event) {
       polls < MAX_POLLS
     ) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      const pollRes = await fetch(`${base}/threads/${threadId}/runs/${runId}`, { headers });
+      const pollRes = await fetch(
+        withApiVersion(`${base}/threads/${threadId}/runs/${runId}`),
+        { headers }
+      );
       if (!pollRes.ok) throw new Error(`Erro ao verificar execução: ${await pollRes.text()}`);
       status = (await pollRes.json()).status;
       polls++;
@@ -87,7 +100,7 @@ export async function handler(event) {
 
     // 5. Get latest assistant message
     const msgsRes = await fetch(
-      `${base}/threads/${threadId}/messages?order=desc&limit=1`,
+      withApiVersion(`${base}/threads/${threadId}/messages?order=desc&limit=1`),
       { headers }
     );
     if (!msgsRes.ok) throw new Error(`Erro ao buscar resposta: ${await msgsRes.text()}`);

@@ -80,17 +80,20 @@ professor-ia/
 
 ## Variáveis de ambiente
 
-Cadastre as três variáveis abaixo em **Netlify → Site configuration → Environment variables**. Nenhuma delas deve ir ao front-end.
+Cadastre as quatro variáveis abaixo em **Netlify → Site configuration → Environment variables**. Nenhuma delas deve ir ao front-end.
 
-| Variável | Obrigatória | Secreta | Onde encontrar no Azure |
+| Variável | Obrigatória | Secreta | Onde encontrar |
 |---|---|---|---|
 | `AZURE_FOUNDRY_ENDPOINT` | Sim | Não | Foundry → Página inicial → **Ponto de extremidade do projeto** |
 | `AZURE_FOUNDRY_KEY` | Sim | **Sim** | Foundry → Página inicial → **Chave de API** |
 | `AZURE_FOUNDRY_AGENT_ID` | Sim | Parcial | Foundry → **Agentes** → clique no agente → copie o ID (`asst_…`) |
+| `AZURE_FOUNDRY_API_VERSION` | Não | Não | Use `2025-05-01-preview` (padrão já embutido no código) |
 
 > **Formato do endpoint:** `https://XXXX.services.ai.azure.com/api/projects/NOME_DO_PROJETO`
 >
 > **Formato do agent ID:** `asst_xxxxxxxxxxxxxxxxxxxxxxxx`
+>
+> **Sobre a API version:** se omitida no Netlify, o código usa `2025-05-01-preview` automaticamente. Só defina esta variável se precisar forçar outra versão.
 
 Para rodar localmente, copie `.env.example` para `.env` e preencha:
 
