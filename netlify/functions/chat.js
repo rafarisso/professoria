@@ -1,6 +1,6 @@
 const POLL_INTERVAL_MS = 1500;
 const MAX_POLLS = 15;
-const API_VERSION = process.env.AZURE_FOUNDRY_API_VERSION || '2025-05-01-preview';
+const API_VERSION = process.env.AZURE_FOUNDRY_API_VERSION || '2025-01-01-preview';
 
 function withApiVersion(url) {
   const sep = url.includes('?') ? '&' : '?';
