@@ -41,11 +41,8 @@ Netlify Function ── netlify/functions/chat.js
        │  api-key: AZURE_FOUNDRY_KEY  (nunca vai ao browser)
        ▼
 Azure AI Foundry Agents API
-  ├── POST /threads                   (cria conversa)
-  ├── POST /threads/{id}/messages     (envia pergunta)
-  ├── POST /threads/{id}/runs         (aciona agente)
-  ├── GET  /threads/{id}/runs/{id}    (polling de status)
-  └── GET  /threads/{id}/messages     (busca resposta)
+  ├── POST /openai/v1/conversations   (cria conversa)
+  └── POST /openai/v1/responses       (aciona o agente por agent_reference)
        │
        ▼
   Agente IA (com ferramenta de busca na web)
@@ -80,20 +77,17 @@ professor-ia/
 
 ## Variáveis de ambiente
 
-Cadastre as quatro variáveis abaixo em **Netlify → Site configuration → Environment variables**. Nenhuma delas deve ir ao front-end.
+Cadastre as três variáveis abaixo em **Netlify → Site configuration → Environment variables**. Nenhuma delas deve ir ao front-end.
 
-| Variável | Obrigatória | Secreta | Onde encontrar |
+| Variável | Obrigatória | Secreta | Onde encontrar no Azure |
 |---|---|---|---|
 | `AZURE_FOUNDRY_ENDPOINT` | Sim | Não | Foundry → Página inicial → **Ponto de extremidade do projeto** |
 | `AZURE_FOUNDRY_KEY` | Sim | **Sim** | Foundry → Página inicial → **Chave de API** |
-| `AZURE_FOUNDRY_AGENT_ID` | Sim | Parcial | Foundry → **Agentes** → clique no agente → copie o ID (`asst_…`) |
-| `AZURE_FOUNDRY_API_VERSION` | Não | Não | Use `2025-05-01-preview` (padrão já embutido no código) |
+| `AZURE_FOUNDRY_AGENT_NAME` | Sim | Não | Foundry → **Agentes** → nome do agente, ex.: `professoria` |
 
 > **Formato do endpoint:** `https://XXXX.services.ai.azure.com/api/projects/NOME_DO_PROJETO`
 >
-> **Formato do agent ID:** `asst_xxxxxxxxxxxxxxxxxxxxxxxx`
->
-> **Sobre a API version:** se omitida no Netlify, o código usa `2025-05-01-preview` automaticamente. Só defina esta variável se precisar forçar outra versão.
+> `AZURE_FOUNDRY_AGENT_ID` ainda é aceito pela função como variável legada, mas neste projeto o valor esperado é o **nome** do agente.
 
 Para rodar localmente, copie `.env.example` para `.env` e preencha:
 
@@ -163,16 +157,14 @@ netlify deploy --prod
 1. Usuário digita a pergunta e pressiona Enter (ou clica no botão enviar)
 2. React faz  POST /api/chat  com { question, threadId }
 3. Netlify Function:
-   a. Cria um thread (ou reutiliza o threadId recebido)
-   b. Posta a mensagem do usuário no thread
-   c. Inicia um "run" do agente
-   d. Polling até status = "completed"  (máx. 15 × 1,5s = 22,5s)
-   e. Busca a última mensagem do assistente
-   f. Retorna { answer, threadId }
+   a. Cria uma conversa no Foundry (ou reutiliza o threadId recebido)
+   b. Chama /openai/v1/responses com agent_reference
+   c. Extrai o output_text da resposta
+   d. Retorna { answer, threadId, conversationId }
 4. React exibe a resposta como bolha do assistente
 ```
 
-O `threadId` é reutilizado entre mensagens para manter o contexto da conversa.
+O `threadId` no front-end guarda o ID da conversa do Foundry para manter o contexto entre mensagens.
 
 ---
 
@@ -187,7 +179,7 @@ O `threadId` é reutilizado entre mensagens para manter o contexto da conversa.
 
 ## Personalização
 
-**Trocar o agente:** altere `AZURE_FOUNDRY_AGENT_ID` nas variáveis do Netlify e faça redeploy.
+**Trocar o agente:** altere `AZURE_FOUNDRY_AGENT_NAME` nas variáveis do Netlify e faça redeploy.
 
 **Alterar as sugestões de perguntas:** edite o array `SUGGESTIONS` em `src/App.tsx`:
 

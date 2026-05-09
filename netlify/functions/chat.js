@@ -1,154 +1,158 @@
-const POLL_INTERVAL_MS = 1500;
-const MAX_POLLS = 15;
-const API_VERSION = process.env.AZURE_FOUNDRY_API_VERSION || 'v1';
-
-function withApiVersion(url) {
-  const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}api-version=${encodeURIComponent(API_VERSION)}`;
+function json(statusCode, payload) {
+  return {
+    statusCode,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  };
 }
 
-async function getBearerToken() {
-  const tenantId = process.env.AZURE_TENANT_ID;
-  const clientId = process.env.AZURE_CLIENT_ID;
-  const clientSecret = process.env.AZURE_CLIENT_SECRET;
+function normalizeEndpoint(value) {
+  return (value || '').trim().replace(/\/+$/, '');
+}
 
-  const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
-  const params = new URLSearchParams({
-    grant_type: 'client_credentials',
-    client_id: clientId,
-    client_secret: clientSecret,
-    scope: 'https://ai.azure.com/.default'
-  });
+function foundryUrl(endpoint, path) {
+  return `${endpoint}${path.startsWith('/') ? path : `/${path}`}`;
+}
 
-  const res = await fetch(tokenUrl, {
+async function readError(response) {
+  const raw = await response.text();
+
+  if (!raw) return `${response.status} ${response.statusText}`.trim();
+
+  try {
+    const parsed = JSON.parse(raw);
+    return (
+      parsed?.error?.message ||
+      parsed?.message ||
+      parsed?.error ||
+      `${response.status} ${response.statusText}`
+    );
+  } catch {
+    return raw;
+  }
+}
+
+async function ensureOk(response, context) {
+  if (response.ok) return response;
+  throw new Error(`${context}: ${await readError(response)}`);
+}
+
+function extractOutputText(payload) {
+  if (typeof payload?.output_text === 'string' && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  const chunks = [];
+  const output = Array.isArray(payload?.output) ? payload.output : [];
+
+  for (const item of output) {
+    if (typeof item?.content === 'string') {
+      chunks.push(item.content);
+      continue;
+    }
+
+    if (!Array.isArray(item?.content)) continue;
+
+    for (const content of item.content) {
+      if (typeof content?.text === 'string') chunks.push(content.text);
+      if (typeof content?.text?.value === 'string') chunks.push(content.text.value);
+      if (typeof content?.content === 'string') chunks.push(content.content);
+    }
+  }
+
+  return chunks.join('\n').trim();
+}
+
+async function createConversation(endpoint, headers) {
+  const response = await fetch(foundryUrl(endpoint, '/openai/v1/conversations'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString()
+    headers,
+    body: '{}'
   });
-  if (!res.ok) throw new Error(`Erro ao obter token Azure AD: ${await res.text()}`);
-  return (await res.json()).access_token;
+
+  await ensureOk(response, 'Erro ao criar conversa no Foundry');
+  const conversation = await response.json();
+
+  if (!conversation?.id) {
+    throw new Error('O Foundry nao retornou o ID da conversa.');
+  }
+
+  return conversation.id;
 }
 
 export async function handler(event) {
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
+    return json(405, { error: 'Method not allowed' });
   }
 
   let body;
   try {
     body = JSON.parse(event.body || '{}');
   } catch {
-    return { statusCode: 400, body: JSON.stringify({ error: 'JSON inválido.' }) };
+    return json(400, { error: 'JSON invalido.' });
   }
 
   const question = body?.question?.toString()?.trim();
-  const incomingThreadId = body?.threadId || null;
+  const incomingConversationId = body?.conversationId || body?.threadId || null;
 
   if (!question) {
-    return { statusCode: 400, body: JSON.stringify({ error: 'Pergunta não enviada.' }) };
+    return json(400, { error: 'Pergunta nao enviada.' });
   }
 
-  const endpoint = (process.env.AZURE_FOUNDRY_ENDPOINT || '').replace(/\/+$/, '');
-  const agentId = process.env.AZURE_FOUNDRY_AGENT_ID;
-  const tenantId = process.env.AZURE_TENANT_ID;
-  const clientId = process.env.AZURE_CLIENT_ID;
-  const clientSecret = process.env.AZURE_CLIENT_SECRET;
+  const endpoint = normalizeEndpoint(process.env.AZURE_FOUNDRY_ENDPOINT);
+  const apiKey = process.env.AZURE_FOUNDRY_KEY;
+  const agentName = process.env.AZURE_FOUNDRY_AGENT_NAME || process.env.AZURE_FOUNDRY_AGENT_ID;
 
-  if (!endpoint || !agentId) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({
-        error: 'Configure AZURE_FOUNDRY_ENDPOINT e AZURE_FOUNDRY_AGENT_ID no Netlify.'
-      })
-    };
+  if (!endpoint || !apiKey || !agentName) {
+    return json(500, {
+      error:
+        'Configure AZURE_FOUNDRY_ENDPOINT, AZURE_FOUNDRY_KEY e AZURE_FOUNDRY_AGENT_NAME no Netlify. Se voce ja usa AZURE_FOUNDRY_AGENT_ID, ele tambem e aceito como nome legado do agente.'
+    });
   }
 
-  if (!tenantId || !clientId || !clientSecret) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({
-        error: 'Configure AZURE_TENANT_ID, AZURE_CLIENT_ID e AZURE_CLIENT_SECRET no Netlify.'
-      })
-    };
-  }
+  const headers = {
+    'Content-Type': 'application/json',
+    'api-key': apiKey
+  };
 
   try {
-    const token = await getBearerToken();
-    const base = `${endpoint}/agents/v1.0`;
-    const headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    };
+    const conversationId =
+      incomingConversationId || (await createConversation(endpoint, headers));
 
-    // 1. Create or reuse thread
-    let threadId = incomingThreadId;
-    if (!threadId) {
-      const res = await fetch(withApiVersion(`${base}/threads`), {
-        method: 'POST',
-        headers,
-        body: '{}'
-      });
-      if (!res.ok) throw new Error(`Erro ao criar thread: ${await res.text()}`);
-      threadId = (await res.json()).id;
-    }
-
-    // 2. Add user message to thread
-    const msgRes = await fetch(withApiVersion(`${base}/threads/${threadId}/messages`), {
+    const response = await fetch(foundryUrl(endpoint, '/openai/v1/responses'), {
       method: 'POST',
       headers,
-      body: JSON.stringify({ role: 'user', content: question })
+      body: JSON.stringify({
+        agent_reference: {
+          type: 'agent_reference',
+          name: agentName
+        },
+        conversation: conversationId,
+        input: [
+          {
+            role: 'user',
+            content: question
+          }
+        ]
+      })
     });
-    if (!msgRes.ok) throw new Error(`Erro ao enviar mensagem: ${await msgRes.text()}`);
 
-    // 3. Run the agent
-    const runRes = await fetch(withApiVersion(`${base}/threads/${threadId}/runs`), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ assistant_id: agentId })
-    });
-    if (!runRes.ok) throw new Error(`Erro ao iniciar execução: ${await runRes.text()}`);
-    const run = await runRes.json();
-    let status = run.status;
-    const runId = run.id;
+    await ensureOk(response, 'Erro ao chamar agente no Foundry');
+    const payload = await response.json();
+    const answer = extractOutputText(payload);
 
-    // 4. Poll until done
-    let polls = 0;
-    while (
-      !['completed', 'failed', 'cancelled', 'expired'].includes(status) &&
-      polls < MAX_POLLS
-    ) {
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      const pollRes = await fetch(
-        withApiVersion(`${base}/threads/${threadId}/runs/${runId}`),
-        { headers }
-      );
-      if (!pollRes.ok) throw new Error(`Erro ao verificar execução: ${await pollRes.text()}`);
-      status = (await pollRes.json()).status;
-      polls++;
+    if (!answer) {
+      throw new Error('Resposta invalida do agente.');
     }
 
-    if (status !== 'completed') {
-      throw new Error(`Execução encerrada com status: ${status}`);
-    }
-
-    // 5. Get latest assistant message
-    const msgsRes = await fetch(
-      withApiVersion(`${base}/threads/${threadId}/messages?order=desc&limit=1`),
-      { headers }
-    );
-    if (!msgsRes.ok) throw new Error(`Erro ao buscar resposta: ${await msgsRes.text()}`);
-    const msgs = await msgsRes.json();
-    const answer = msgs.data?.[0]?.content?.[0]?.text?.value;
-    if (!answer) throw new Error('Resposta inválida do agente.');
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ answer, threadId })
-    };
+    return json(200, {
+      answer,
+      threadId: conversationId,
+      conversationId
+    });
   } catch (err) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: err instanceof Error ? err.message : 'Erro desconhecido.' })
-    };
+    return json(500, {
+      error: err instanceof Error ? err.message : 'Erro desconhecido.'
+    });
   }
 }
