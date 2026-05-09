@@ -40,7 +40,7 @@ export async function handler(event) {
     };
   }
 
-  const base = `${endpoint}/agents/v1.0`;
+  const base = endpoint;
   const headers = {
     'Content-Type': 'application/json',
     'api-key': apiKey
