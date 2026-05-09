@@ -7,6 +7,28 @@ function withApiVersion(url) {
   return `${url}${sep}api-version=${encodeURIComponent(API_VERSION)}`;
 }
 
+async function getBearerToken() {
+  const tenantId = process.env.AZURE_TENANT_ID;
+  const clientId = process.env.AZURE_CLIENT_ID;
+  const clientSecret = process.env.AZURE_CLIENT_SECRET;
+
+  const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+  const params = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret,
+    scope: 'https://ai.azure.com/.default'
+  });
+
+  const res = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString()
+  });
+  if (!res.ok) throw new Error(`Erro ao obter token Azure AD: ${await res.text()}`);
+  return (await res.json()).access_token;
+}
+
 export async function handler(event) {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
@@ -27,26 +49,37 @@ export async function handler(event) {
   }
 
   const endpoint = (process.env.AZURE_FOUNDRY_ENDPOINT || '').replace(/\/+$/, '');
-  const apiKey = process.env.AZURE_FOUNDRY_KEY;
   const agentId = process.env.AZURE_FOUNDRY_AGENT_ID;
+  const tenantId = process.env.AZURE_TENANT_ID;
+  const clientId = process.env.AZURE_CLIENT_ID;
+  const clientSecret = process.env.AZURE_CLIENT_SECRET;
 
-  if (!endpoint || !apiKey || !agentId) {
+  if (!endpoint || !agentId) {
     return {
       statusCode: 500,
       body: JSON.stringify({
-        error:
-          'Configure AZURE_FOUNDRY_ENDPOINT, AZURE_FOUNDRY_KEY e AZURE_FOUNDRY_AGENT_ID no Netlify.'
+        error: 'Configure AZURE_FOUNDRY_ENDPOINT e AZURE_FOUNDRY_AGENT_ID no Netlify.'
       })
     };
   }
 
-  const base = endpoint;
-  const headers = {
-    'Content-Type': 'application/json',
-    'api-key': apiKey
-  };
+  if (!tenantId || !clientId || !clientSecret) {
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        error: 'Configure AZURE_TENANT_ID, AZURE_CLIENT_ID e AZURE_CLIENT_SECRET no Netlify.'
+      })
+    };
+  }
 
   try {
+    const token = await getBearerToken();
+    const base = `${endpoint}/agents/v1.0`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    };
+
     // 1. Create or reuse thread
     let threadId = incomingThreadId;
     if (!threadId) {
